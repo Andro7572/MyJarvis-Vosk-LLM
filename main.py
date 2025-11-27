@@ -15,17 +15,12 @@ from openai import OpenAI
 import requests
 from bs4 import BeautifulSoup
 
-# ------------------- LLM and History Setup -------------------
-# !!! ENSURE LM STUDIO IS RUNNING AND MODEL IS LOADED ON http://localhost:1234 !!!
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
 
 conversation_history = []
 MAX_HISTORY = 3
 last_operation = "None recorded."
 
-# ------------------- FORCED LLM WORDS FILTER -------------------
-# Words that should bypass hard command checks (like 'time' or 'date') and be
-# sent directly to the LLM (Gemma 3) to prevent false positives from Vosk.
 FORCED_LLM_WORDS = [
     "yes",
     "no",
@@ -42,17 +37,14 @@ FORCED_LLM_WORDS = [
     "when",
     "how",
     "answer",
-    # Conversational phrases like 'hello' and 'thanks' are handled in the commands dict now.
 ]
 
 
-# ------------------- TTS (Voice Function - gTTS) -------------------
 def speak(text):
     """Speaks the provided text using gTTS and playsound."""
     print(f"<< Jarvis: {text}")
     filename = "temp.mp3"
     try:
-        # Clean up punctuation before 'sir' to ensure smooth TTS delivery
         tts_text = (
             text.replace(" sir.", " sir")
             .replace(" sir!", " sir")
@@ -65,7 +57,6 @@ def speak(text):
     except Exception as e:
         print(f"TTS Error (gTTS/playsound): {e}. Skipping speech.")
     finally:
-        # Clean up the temporary audio file
         time.sleep(0.1)
         if os.path.exists(filename):
             try:
@@ -74,7 +65,6 @@ def speak(text):
                 pass
 
 
-# ------------------- Utility Functions for Applications -------------------
 def open_app(command_list, name):
     """Universal function to open applications based on OS."""
     try:
@@ -92,7 +82,7 @@ def open_app(command_list, name):
                 subprocess.Popen(["open", command_list[0]])
             else:
                 subprocess.Popen(command_list)
-        else:  # Linux
+        else:
             subprocess.Popen(command_list)
         return f"Opening {name}"
     except Exception:
@@ -111,7 +101,6 @@ def open_itunes():
     return open_app(["itunes"], "iTunes")
 
 
-# ------------------- LLM Logic (Gemma 3 via LM Studio) -------------------
 def ask_llm(user_text):
     """Sends a query to the LLM with conversation history and a timeout."""
     global last_operation
@@ -119,7 +108,6 @@ def ask_llm(user_text):
     history_messages = []
     for turn in conversation_history:
         user_message = turn["user"]
-        # Strip 'sir.' from Jarvis's previous response for clean context
         jarvis_message = (
             turn["jarvis"]
             .replace(" sir.", "")
@@ -130,7 +118,6 @@ def ask_llm(user_text):
         history_messages.append({"role": "user", "content": user_message})
         history_messages.append({"role": "assistant", "content": jarvis_message})
 
-    # System instruction (The core personality and constraints)
     system_instruction = (
         "You are Jarvis, Tony Stark's witty and superior AI assistant. "
         "Your responses must be in English. Answer in full sentences, but be **extremely concise** and **avoid any excessive politeness, introductions, or verbose filler phrases**. "
@@ -161,7 +148,6 @@ def ask_llm(user_text):
         return f"Sir, I seem to have lost connection to the mainframe. Error: {e}"
 
 
-# ------------------- Vosk Setup -------------------
 if not os.path.exists("model"):
     print("Error: Vosk model 'model' folder not found. Please download and unpack it.")
     sys.exit(1)
@@ -185,8 +171,6 @@ except Exception as e:
     )
     sys.exit(1)
 
-
-# ------------------- Hard Commands Dictionary -------------------
 commands = {
     "time": {
         "keywords": [
@@ -304,7 +288,7 @@ commands = {
             "apology",
             "i'm sorry",
             "i am sorry",
-            "sorry",  # Added sorry phrases here
+            "sorry",
         ],
         "responses": [
             "You're welcome!",
@@ -312,7 +296,7 @@ commands = {
             "Anytime, my friend.",
             "My pleasure!",
             "Glad I could assist!",
-            "Understood, apology accepted.",  # Response for sorry
+            "Understood, apology accepted.",
         ],
     },
     "hello": {
@@ -334,7 +318,7 @@ commands = {
             "afternoon",
             "good morning",
             "top of the morning",
-            "good morning to you",  # Combined good_morning here
+            "good morning to you",
         ],
         "responses": [
             "Hello! How can I help you today?",
@@ -409,7 +393,6 @@ commands = {
 }
 
 
-# ------------------- TTS Formatting -------------------
 def format_for_tts(response, add_sir):
     """Optimizes the string by conditionally adding ' sir.'."""
     if not add_sir:
@@ -424,7 +407,6 @@ def format_for_tts(response, add_sir):
     return stripped_resp + " sir."
 
 
-# ------------------- Main Loop -------------------
 greetings = [
     "Systems online, sir.",
     "Mini Jarvis online and operational.",
@@ -453,10 +435,8 @@ while True:
         found_command = False
         raw_response = ""
 
-        # 33% chance to add "sir"
         add_sir_flag = random.random() < 0.33
 
-        # Filter: Check if input is a short/ambiguous word forcing LLM usage
         is_forced_llm = False
         if len(text.split()) <= 2:
             for word in FORCED_LLM_WORDS:
@@ -464,20 +444,17 @@ while True:
                     is_forced_llm = True
                     break
 
-        # 1. Check Hard Commands (Vosk + Fuzz)
         if not is_forced_llm:
             for cmd, info in commands.items():
                 for kw in info["keywords"]:
                     similarity = fuzz.ratio(text, kw.lower())
                     partial_similarity = fuzz.partial_ratio(text, kw.lower())
 
-                    # Filtering logic to prevent short, non-specific matches from triggering commands
                     if cmd not in ["chrome", "youtube", "itunes"]:
                         length_ratio = len(kw) / max(len(text), 1)
                         if length_ratio < 0.5 and similarity < 90:
                             continue
 
-                    # Core FUZZ Logic:
                     if similarity > 85 or partial_similarity > 98:
 
                         raw_resp = info["responses"]
@@ -504,7 +481,6 @@ while True:
                 if found_command:
                     break
 
-        # 2. FALLBACK: If no hard command found (or was a FORCED_LLM_WORD) -> Ask Gemma 3
         if not found_command:
             print("...Consulting Gemma 3 via LM Studio...")
 
@@ -516,7 +492,6 @@ while True:
             final_response = format_for_tts(raw_response, add_sir_flag)
             speak(final_response)
 
-        # 3. Update Conversation History
         conversation_history.append({"user": text, "jarvis": final_response})
 
         if len(conversation_history) > MAX_HISTORY:
