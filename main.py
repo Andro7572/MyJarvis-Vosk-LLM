@@ -5,22 +5,26 @@ import subprocess
 import platform
 import json
 import time
-from vosk import Model, KaldiRecognizer
-import pyaudio
-from gtts import gTTS
+from vosk import (
+    Model,
+    KaldiRecognizer,
+)  # Imports Vosk library for offline speech recognition
+import pyaudio  # Imports PyAudio for microphone access
+from gtts import gTTS  # Imports gTTS for Text-to-Speech
 from playsound import playsound
 from datetime import datetime
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz  # Imports for fuzzy string matching (command comparison)
 from openai import OpenAI
 import requests
-from bs4 import BeautifulSoup
 
+# Initialize OpenAI client to connect to a local LLM server (e.g., LM Studio)
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
 
 conversation_history = []
-MAX_HISTORY = 3
+MAX_HISTORY = 3  # Maximum turns to keep for LLM context
 last_operation = "None recorded."
 
+# Keywords that force a direct call to the LLM, even if short
 FORCED_LLM_WORDS = [
     "yes",
     "no",
@@ -45,6 +49,7 @@ def speak(text):
     print(f"<< Jarvis: {text}")
     filename = "temp.mp3"
     try:
+        # Cleanup " sir" variants for better TTS
         tts_text = (
             text.replace(" sir.", " sir")
             .replace(" sir!", " sir")
@@ -60,7 +65,7 @@ def speak(text):
         time.sleep(0.1)
         if os.path.exists(filename):
             try:
-                os.remove(filename)
+                os.remove(filename)  # Clean up temp file
             except PermissionError:
                 pass
 
@@ -70,7 +75,7 @@ def open_app(command_list, name):
     try:
         if platform.system() == "Windows":
             subprocess.Popen(["start"] + command_list, shell=True)
-        elif platform.system() == "Darwin":
+        elif platform.system() == "Darwin":  # macOS logic
             app_name = (
                 name
                 if name not in ["YouTube"]
@@ -83,7 +88,7 @@ def open_app(command_list, name):
             else:
                 subprocess.Popen(command_list)
         else:
-            subprocess.Popen(command_list)
+            subprocess.Popen(command_list)  # Generic Linux/other
         return f"Opening {name}"
     except Exception:
         return f"Could not open {name}"
@@ -102,10 +107,11 @@ def open_itunes():
 
 
 def ask_llm(user_text):
-    """Sends a query to the LLM with conversation history and a timeout."""
+    """Sends a query to the local LLM with conversation history."""
     global last_operation
 
     history_messages = []
+    # Prepare history for LLM context
     for turn in conversation_history:
         user_message = turn["user"]
         jarvis_message = (
@@ -118,6 +124,7 @@ def ask_llm(user_text):
         history_messages.append({"role": "user", "content": user_message})
         history_messages.append({"role": "assistant", "content": jarvis_message})
 
+    # System prompt defines Jarvis's persona and response rules
     system_instruction = (
         "You are Jarvis, Tony Stark's witty and superior AI assistant. "
         "Your responses must be in English. Answer in full sentences, but be **extremely concise** and **avoid any excessive politeness, introductions, or verbose filler phrases**. "
@@ -131,6 +138,7 @@ def ask_llm(user_text):
     messages.append({"role": "user", "content": user_text})
 
     try:
+        # API call to the local LLM endpoint
         completion = client.chat.completions.create(
             model="local-model",
             messages=messages,
@@ -148,15 +156,18 @@ def ask_llm(user_text):
         return f"Sir, I seem to have lost connection to the mainframe. Error: {e}"
 
 
+# --- Vosk and PyAudio Setup ---
+
 if not os.path.exists("model"):
     print("Error: Vosk model 'model' folder not found. Please download and unpack it.")
     sys.exit(1)
 
-model = Model("model")
+model = Model("model")  # Load the speech recognition model
 rec = KaldiRecognizer(model, 16000)
 
 p = pyaudio.PyAudio()
 try:
+    # Open microphone stream
     stream = p.open(
         format=pyaudio.paInt16,
         channels=1,
@@ -170,6 +181,8 @@ except Exception as e:
         f"FATAL ERROR: Could not open PyAudio stream. Check your microphone drivers or if another application is using the microphone. Error: {e}"
     )
     sys.exit(1)
+
+# --- Hardcoded Commands Dictionary ---
 
 commands = {
     "time": {
@@ -342,7 +355,7 @@ commands = {
             "open google",
             "can you open chrome",
         ],
-        "responses": [open_chrome],
+        "responses": [open_chrome],  # Calls the function to open the app
     },
     "youtube": {
         "keywords": [
@@ -356,7 +369,7 @@ commands = {
             "go to youtube",
             "launch the youtube website",
         ],
-        "responses": [open_youtube],
+        "responses": [open_youtube],  # Calls the function to open the URL
     },
     "itunes": {
         "keywords": [
@@ -371,7 +384,7 @@ commands = {
             "start apple music",
             "can you open itunes",
         ],
-        "responses": [open_itunes],
+        "responses": [open_itunes],  # Calls the function to open the app
     },
     "shut down": {
         "keywords": [
@@ -394,7 +407,7 @@ commands = {
 
 
 def format_for_tts(response, add_sir):
-    """Optimizes the string by conditionally adding ' sir.'."""
+    """Adds ' sir.' to the end of the response if the flag is set, cleaning up existing punctuation."""
     if not add_sir:
         return response
 
@@ -402,7 +415,7 @@ def format_for_tts(response, add_sir):
     punctuation = [".", "!", "?", ","]
 
     while stripped_resp and stripped_resp[-1] in punctuation:
-        stripped_resp = stripped_resp[:-1]
+        stripped_resp = stripped_resp[:-1]  # Remove trailing punctuation
 
     return stripped_resp + " sir."
 
@@ -417,6 +430,7 @@ greetings = [
 speak(random.choice(greetings))
 print("Listening...")
 
+# --- Main Recognition Loop ---
 while True:
     data = stream.read(4000, exception_on_overflow=False)
 
@@ -435,8 +449,9 @@ while True:
         found_command = False
         raw_response = ""
 
-        add_sir_flag = random.random() < 0.33
+        add_sir_flag = random.random() < 0.33  # 33% chance to add "sir"
 
+        # Check for short, conversational forced LLM words
         is_forced_llm = False
         if len(text.split()) <= 2:
             for word in FORCED_LLM_WORDS:
@@ -445,17 +460,19 @@ while True:
                     break
 
         if not is_forced_llm:
+            # Check for hardcoded commands
             for cmd, info in commands.items():
                 for kw in info["keywords"]:
                     similarity = fuzz.ratio(text, kw.lower())
                     partial_similarity = fuzz.partial_ratio(text, kw.lower())
 
+                    # Skip if keyword is much longer than input to avoid false positives
                     if cmd not in ["chrome", "youtube", "itunes"]:
                         length_ratio = len(kw) / max(len(text), 1)
                         if length_ratio < 0.5 and similarity < 90:
                             continue
 
-                    if similarity > 85 or partial_similarity > 98:
+                    if similarity > 85 or partial_similarity > 98:  # Match threshold
 
                         raw_resp = info["responses"]
                         if isinstance(raw_resp, list):
@@ -468,7 +485,7 @@ while True:
 
                         if cmd == "shut down":
                             speak(raw_response)
-                            exit()
+                            exit()  # Terminate program
 
                         final_response = format_for_tts(raw_response, add_sir_flag)
                         speak(final_response)
@@ -482,6 +499,7 @@ while True:
                     break
 
         if not found_command:
+            # Fallback to LLM if no command matched
             print("...Consulting Gemma 3 via LM Studio...")
 
             raw_response = ask_llm(text)
@@ -492,6 +510,7 @@ while True:
             final_response = format_for_tts(raw_response, add_sir_flag)
             speak(final_response)
 
+        # Update and trim conversation history
         conversation_history.append({"user": text, "jarvis": final_response})
 
         if len(conversation_history) > MAX_HISTORY:
